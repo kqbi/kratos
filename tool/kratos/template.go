@@ -76,6 +76,8 @@ import (
 	"{{.ModuleName}}/internal/service"
 	"github.com/bilibili/kratos/pkg/conf/paladin"
 	"github.com/bilibili/kratos/pkg/log"
+
+	_ "go.uber.org/automaxprocs"
 )
 
 func main() {
@@ -127,6 +129,8 @@ import (
 	"{{.ModuleName}}/internal/service"
 	"github.com/bilibili/kratos/pkg/conf/paladin"
 	"github.com/bilibili/kratos/pkg/log"
+
+	_ "go.uber.org/automaxprocs"
 )
 
 func main() {
@@ -142,8 +146,7 @@ func main() {
 	httpSrv := http.New(svc)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
-	for {
-		s := <-c
+	for s := range c {
 		log.Info("get a signal %s", s.String())
 		switch s {
 		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
@@ -547,7 +550,7 @@ type Kratos struct {
 go 1.12
 
 require (
-	github.com/bilibili/kratos v0.2.1
+	github.com/bilibili/kratos master
 	github.com/gogo/protobuf v1.2.1
 	github.com/golang/protobuf v1.3.2
 	golang.org/x/net v0.0.0-20190628185345-da137c7871d7

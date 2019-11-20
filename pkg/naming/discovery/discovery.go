@@ -38,6 +38,7 @@ const (
 var (
 	_ naming.Builder  = &Discovery{}
 	_ naming.Registry = &Discovery{}
+	_ naming.Resolver = &Resolve{}
 
 	// ErrDuplication duplication treeid.
 	ErrDuplication = errors.New("discovery: instance duplicate registration")
@@ -70,11 +71,6 @@ type Config struct {
 	Host   string
 }
 
-type appData struct {
-	Instances map[string][]*naming.Instance `json:"instances"`
-	LastTs    int64                         `json:"latest_timestamp"`
-}
-
 // Discovery is discovery client.
 type Discovery struct {
 	c          *Config
@@ -102,7 +98,7 @@ type appInfo struct {
 }
 
 func fixConfig(c *Config) error {
-	if len(c.Nodes) == 0 {
+	if len(c.Nodes) == 0 && env.DiscoveryNodes != "" {
 		c.Nodes = strings.Split(env.DiscoveryNodes, ",")
 	}
 	if c.Region == "" {
@@ -219,11 +215,15 @@ func (d *Discovery) newSelf(zones map[string][]*naming.Instance) {
 }
 
 // Build disovery resovler builder.
-func (d *Discovery) Build(appid string) naming.Resolver {
+func (d *Discovery) Build(appid string, opts ...naming.BuildOpt) naming.Resolver {
 	r := &Resolve{
 		id:    appid,
 		d:     d,
 		event: make(chan struct{}, 1),
+		opt:   new(naming.BuildOptions),
+	}
+	for _, opt := range opts {
+		opt.Apply(r.opt)
 	}
 	d.mutex.Lock()
 	app, ok := d.apps[appid]
@@ -262,6 +262,7 @@ type Resolve struct {
 	id    string
 	event chan struct{}
 	d     *Discovery
+	opt   *naming.BuildOptions
 }
 
 // Watch watch instance.
@@ -276,7 +277,17 @@ func (r *Resolve) Fetch(ctx context.Context) (ins *naming.InstancesInfo, ok bool
 	r.d.mutex.RUnlock()
 	if ok {
 		ins, ok = app.zoneIns.Load().(*naming.InstancesInfo)
-		return
+		if r.opt.Filter != nil {
+			ins.Instances = r.opt.Filter(ins.Instances)
+		}
+		if r.opt.Scheduler != nil {
+			ins.Instances[r.opt.ClientZone] = r.opt.Scheduler(ins)
+		}
+		if r.opt.Subset != nil && r.opt.SubsetSize != 0 {
+			for zone, inss := range ins.Instances {
+				ins.Instances[zone] = r.opt.Subset(inss, r.opt.SubsetSize)
+			}
+		}
 	}
 	return
 }
@@ -338,7 +349,7 @@ func (d *Discovery) Register(ctx context.Context, ins *naming.Instance) (cancelF
 		for {
 			select {
 			case <-ticker.C:
-				if err := d.renew(ctx, ins); err != nil && ecode.NothingFound.Equal(err) {
+				if err := d.renew(ctx, ins); err != nil && ecode.EqualError(ecode.NothingFound, err) {
 					_ = d.register(ctx, ins)
 				}
 			case <-ctx.Done():
@@ -370,9 +381,15 @@ func (d *Discovery) register(ctx context.Context, ins *naming.Instance) (err err
 	uri := fmt.Sprintf(_registerURL, d.pickNode())
 	params := d.newParams(c)
 	params.Set("appid", ins.AppID)
-	params.Set("addrs", strings.Join(ins.Addrs, ","))
+	for _, addr := range ins.Addrs {
+		params.Add("addrs", addr)
+	}
 	params.Set("version", ins.Version)
-	params.Set("status", _statusUP)
+	if ins.Status == 0 {
+		params.Set("status", _statusUP)
+	} else {
+		params.Set("status", strconv.FormatInt(ins.Status, 10))
+	}
 	params.Set("metadata", string(metadata))
 	if err = d.httpClient.Post(ctx, uri, "", params, &res); err != nil {
 		d.switchNode()
@@ -380,7 +397,7 @@ func (d *Discovery) register(ctx context.Context, ins *naming.Instance) (err err
 			uri, c.Zone, c.Env, ins.AppID, ins.Addrs, err)
 		return
 	}
-	if ec := ecode.Int(res.Code); !ec.Equal(ecode.OK) {
+	if ec := ecode.Int(res.Code); !ecode.Equal(ecode.OK, ec) {
 		log.Warn("discovery: register client.Get(%v)  env(%s) appid(%s) addrs(%v) code(%v)", uri, c.Env, ins.AppID, ins.Addrs, res.Code)
 		err = ec
 		return
@@ -408,9 +425,9 @@ func (d *Discovery) renew(ctx context.Context, ins *naming.Instance) (err error)
 			uri, c.Env, ins.AppID, c.Host, err)
 		return
 	}
-	if ec := ecode.Int(res.Code); !ec.Equal(ecode.OK) {
+	if ec := ecode.Int(res.Code); !ecode.Equal(ecode.OK, ec) {
 		err = ec
-		if ec.Equal(ecode.NothingFound) {
+		if ecode.Equal(ecode.NothingFound, ec) {
 			return
 		}
 		log.Error("discovery: renew client.Get(%v) env(%s) appid(%s) hostname(%s) code(%v)",
@@ -440,7 +457,7 @@ func (d *Discovery) cancel(ins *naming.Instance) (err error) {
 			uri, c.Env, ins.AppID, c.Host, err)
 		return
 	}
-	if ec := ecode.Int(res.Code); !ec.Equal(ecode.OK) {
+	if ec := ecode.Int(res.Code); !ecode.Equal(ecode.OK, ec) {
 		log.Warn("discovery cancel client.Get(%v)  env(%s) appid(%s) hostname(%s) code(%v)",
 			uri, c.Env, ins.AppID, c.Host, res.Code)
 		err = ec
@@ -469,7 +486,7 @@ func (d *Discovery) set(ctx context.Context, ins *naming.Instance) (err error) {
 	params := d.newParams(conf)
 	params.Set("appid", ins.AppID)
 	params.Set("version", ins.Version)
-	params.Set("status", _statusUP)
+	params.Set("status", strconv.FormatInt(ins.Status, 10))
 	if ins.Metadata != nil {
 		var metadata []byte
 		if metadata, err = json.Marshal(ins.Metadata); err != nil {
@@ -484,7 +501,7 @@ func (d *Discovery) set(ctx context.Context, ins *naming.Instance) (err error) {
 			uri, conf.Zone, conf.Env, ins.AppID, ins.Addrs, err)
 		return
 	}
-	if ec := ecode.Int(res.Code); !ec.Equal(ecode.OK) {
+	if ec := ecode.Int(res.Code); !ecode.Equal(ecode.OK, ec) {
 		log.Warn("discovery: set client.Get(%v)  env(%s) appid(%s) addrs(%v)  code(%v)",
 			uri, conf.Env, ins.AppID, ins.Addrs, res.Code)
 		err = ec
@@ -587,8 +604,8 @@ func (d *Discovery) polls(ctx context.Context) (apps map[string]*naming.Instance
 		log.Error("discovery: client.Get(%s) error(%+v)", uri+"?"+params.Encode(), err)
 		return
 	}
-	if ec := ecode.Int(res.Code); !ec.Equal(ecode.OK) {
-		if !ec.Equal(ecode.NotModified) {
+	if ec := ecode.Int(res.Code); !ecode.Equal(ecode.OK, ec) {
+		if !ecode.Equal(ecode.NotModified, ec) {
 			log.Error("discovery: client.Get(%s) get error code(%d)", uri+"?"+params.Encode(), res.Code)
 			err = ec
 		}
@@ -611,7 +628,7 @@ func (d *Discovery) broadcast(apps map[string]*naming.InstancesInfo) {
 	for appID, v := range apps {
 		var count int
 		// v maybe nil in old version(less than v1.1) discovery,check incase of panic
-		if v==nil {
+		if v == nil {
 			continue
 		}
 		for zone, ins := range v.Instances {
