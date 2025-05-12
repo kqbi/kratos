@@ -4,14 +4,13 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
 
 syntax = "proto3";
 
@@ -25,21 +24,6 @@ option java_outer_classname = "FieldBehaviorProto";
 option java_package = "com.google.api";
 option objc_class_prefix = "GAPI";
 
-extend google.protobuf.FieldOptions {
-  // A designation of a specific field behavior (required, output only, etc.)
-  // in protobuf messages.
-  //
-  // Examples:
-  //
-  //   string name = 1 [(google.api.field_behavior) = REQUIRED];
-  //   State state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
-  //   google.protobuf.Duration ttl = 1
-  //     [(google.api.field_behavior) = INPUT_ONLY];
-  //   google.protobuf.Timestamp expire_time = 1
-  //     [(google.api.field_behavior) = OUTPUT_ONLY,
-  //      (google.api.field_behavior) = IMMUTABLE];
-  repeated google.api.FieldBehavior field_behavior = 1052;
-}
 
 // An indicator of the behavior of a given field (for example, that a field
 // is required in requests, or given as output but ignored as input).
@@ -76,4 +60,21 @@ enum FieldBehavior {
   // This indicates that the field may be set once in a request to create a
   // resource, but may not be changed thereafter.
   IMMUTABLE = 5;
+}
+
+
+extend google.protobuf.FieldOptions {
+  // A designation of a specific field behavior (required, output only, etc.)
+  // in protobuf messages.
+  //
+  // Examples:
+  //
+  //   string name = 1 [(google.api.field_behavior) = REQUIRED];
+  //   State state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  //   google.protobuf.Duration ttl = 1
+  //     [(google.api.field_behavior) = INPUT_ONLY];
+  //   google.protobuf.Timestamp expire_time = 1
+  //     [(google.api.field_behavior) = OUTPUT_ONLY,
+  //      (google.api.field_behavior) = IMMUTABLE];
+  repeated FieldBehavior field_behavior = 1052;
 }
